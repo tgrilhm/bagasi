@@ -1,0 +1,40 @@
+# Python cache / local runtime
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build outputs
+build/
+dist/
+*.spec
+
+# Local app data and generated exports
+data/*.db
+data/credentials.json
+data/gs_config.json
+exports/
+test_export_sample.xlsx
+test_receipt_sample.*
+
+# Google OAuth/client secrets
+client_secret*.json
+credentials*.json
+token*.json
+
+# Local tooling / unrelated nested repo
+.agent/
+.agents/
+.codex/
+ecc/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
