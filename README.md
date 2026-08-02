@@ -1,6 +1,6 @@
 # BAGASI
 
-Aplikasi desktop untuk manajemen pengiriman bagasi/paket Amanah Baggage. Aplikasi ini dibuat dengan Python dan CustomTkinter, memakai SQLite sebagai database lokal, serta mendukung ekspor resi dan sinkronisasi data ke Google Sheets melalui Google Apps Script Web App.
+Aplikasi desktop untuk manajemen pengiriman bagasi. Aplikasi ini dibuat dengan Python dan CustomTkinter, memakai SQLite sebagai database lokal, serta mendukung ekspor resi dan sinkronisasi data ke Google Sheets melalui Google Apps Script Web App.
 
 ## Fitur
 
