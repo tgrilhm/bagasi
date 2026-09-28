@@ -84,7 +84,8 @@ def _styles():
 # Resi PDF
 # ---------------------------------------------------------------------------
 
-def cetak_resi(paket: dict, kloter: dict, output_path: Path) -> Path:
+def cetak_resi(paket: dict, kloter: dict, kategoris: list, output_path: Path) -> Path:
+    """Generate resi PDF untuk paket dengan multiple kategoris."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     s = _styles()
     doc = SimpleDocTemplate(
@@ -131,7 +132,7 @@ def cetak_resi(paket: dict, kloter: dict, output_path: Path) -> Path:
     story.append(resi_tbl)
     story.append(Spacer(1, 3*mm))
 
-    # Pengirim & Penerima section
+    # Penerima section
     def info_section(title: str, nama: str, hp: str):
         data = [
             [Paragraph(title, s["section"])],
@@ -149,15 +150,6 @@ def cetak_resi(paket: dict, kloter: dict, output_path: Path) -> Path:
         ]))
         return tbl
 
-
-    # Pengirim
-    story.append(info_section(
-        "PENGIRIM",
-        paket.get("nama_pengirim") or "—",
-        paket.get("no_hp_pengirim") or "—",
-    ))
-    story.append(Spacer(1, 2*mm))
-
     # Penerima
     story.append(info_section(
         "PENERIMA",
@@ -166,18 +158,28 @@ def cetak_resi(paket: dict, kloter: dict, output_path: Path) -> Path:
     ))
     story.append(Spacer(1, 3*mm))
 
-    # Detail barang
+    # Detail barang - combined format
     detail_rows = [
         [Paragraph("DETAIL BARANG", s["section"])],
     ]
+    
+    # Format kategori gabungan seperti Excel
+    if kategoris:
+        kat_parts = []
+        total_berat = 0
+        for kat in kategoris:
+            kat_parts.append(f"{kat['kategori']} - {kat['isi_barang']} ({kat['berat_kg']}kg)")
+            total_berat += kat['berat_kg']
+        detail_str = ", ".join(kat_parts)
+    else:
+        detail_str = "—"
+        total_berat = 0
+    
     items = [
-        ("Kategori",  paket["kategori"]),
-        ("Berat",     berat_fmt(paket["berat_kg"])),
-        ("Tarif/kg",  rupiah(paket["tarif_per_kg"])),
-        ("Tanggal",   tanggal_indo(paket["tanggal_dibuat"])),
+        ("Detail Kategori", detail_str),
+        ("Total Berat", f"{total_berat:.2f} kg"),
+        ("Tanggal", tanggal_indo(paket["tanggal_dibuat"])),
     ]
-    if paket.get("catatan"):
-        items.append(("Catatan", paket["catatan"]))
 
     inner = [[Paragraph(k, s["label"]), Paragraph(v, s["value"])] for k, v in items]
     detail_rows.append([Table(inner, colWidths=[16*mm, 50*mm],

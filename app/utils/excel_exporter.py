@@ -112,22 +112,21 @@ def export_kloter(kloter: dict, paket_list: list[dict],
     c2.fill      = PatternFill("solid", fgColor=_BLUE_LT)
     c2.alignment = Alignment(horizontal="center")
 
-    # Kolom headers sesuai permintaan:
-    # ID | No Resi | Kloter | Nama | No HP | Jenis | Berat |
-    # Penerima | Bayar | Rekening Tujuan | Tgl Dibuat | Tgl Selesai
+    # Kolom headers untuk multi-kategori:
+    # ID | No Resi | Kloter | Penerima | HP Penerima | Detail Kategori | 
+    # Total Berat | Bayar | Rekening Tujuan | Tgl Dibuat | Tgl Selesai
     headers = [
         ("ID",              9),
         ("No Resi",        16),
         ("Kloter",         20),
-        ("Nama",           22),   # Nama Pengirim
-        ("No HP",          16),   # No HP Pengirim
-        ("Jenis",          12),   # Kategori
-        ("Berat",          10),
-        ("Penerima",       22),   # Nama Penerima
-        ("Bayar",          16),   # Total Harga
-        ("Rekening Tujuan",22),   # Kolom baru — bisa diisi manual di Excel
+        ("Penerima",       22),
+        ("HP Penerima",    16),
+        ("Detail Kategori",40),   # Multi-kategori detail
+        ("Total Berat",    12),
+        ("Bayar",          16),
+        ("Rekening Tujuan",22),
         ("Tgl Dibuat",     18),
-        ("Tgl Selesai",    18),   # tanggal_selesai kloter
+        ("Tgl Selesai",    18),
     ]
 
     # Isi header row (row 3)
@@ -141,6 +140,7 @@ def export_kloter(kloter: dict, paket_list: list[dict],
     ws2.row_dimensions[3].height = 22
 
     # Data rows (mulai row 4)
+    from ..models import database
     tgl_selesai_kloter = (tanggal_waktu(kloter["tanggal_selesai"])
                           if kloter.get("tanggal_selesai") else "-")
 
@@ -148,15 +148,28 @@ def export_kloter(kloter: dict, paket_list: list[dict],
         r   = idx + 3
         alt = PatternFill("solid", fgColor=_GRAY2) if idx % 2 == 0 else None
 
+        # Get kategoris untuk paket ini
+        kategoris = database.get_paket_kategoris(p["id"])
+        if kategoris:
+            kat_parts = []
+            total_berat = 0
+            for kat in kategoris:
+                kat_parts.append(f"{kat['kategori']} - {kat['isi_barang']} ({kat['berat_kg']}kg)")
+                total_berat += kat['berat_kg']
+            detail_kat = ", ".join(kat_parts)
+            berat_str = f"{total_berat:.2f}"
+        else:
+            detail_kat = "—"
+            berat_str = "0"
+
         values = [
             p["id"],
             p["no_resi"],
             kloter["nama_kloter"],
-            p["nama_pengirim"],
-            p["no_hp_pengirim"],
-            p["kategori"],
-            p["berat_kg"],
             p["nama_penerima"],
+            p["no_hp_penerima"],
+            detail_kat,
+            berat_str,
             p["total_harga"],
             "",                             # Rekening Tujuan — diisi manual
             tanggal_waktu(p["tanggal_dibuat"]),

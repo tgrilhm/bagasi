@@ -27,11 +27,27 @@ sample_kloter = {
     "status": "Terbuka"
 }
 
+# Sample kategoris - multiple categories to test the new feature
+sample_kategoris = [
+    {
+        "id": 1,
+        "nama_kategori": "Pakaian",
+        "berat_kg": 3.5,
+        "tarif_per_kg": 15000
+    },
+    {
+        "id": 2,
+        "nama_kategori": "Elektronik",
+        "berat_kg": 2.0,
+        "tarif_per_kg": 25000
+    }
+]
+
 # Generate Image
 output_path = Path("test_receipt_sample.png")
 try:
     print("[INFO] Generating receipt image...")
-    cetak_resi_image(sample_paket, sample_kloter, output_path)
+    cetak_resi_image(sample_paket, sample_kloter, sample_kategoris, output_path)
     print(f"[OK] Receipt image berhasil dibuat: {output_path.absolute()}")
     print(f"[OK] Format: PNG image (300px x 600px)")
     print(f"[OK] Silakan buka file untuk melihat hasilnya")

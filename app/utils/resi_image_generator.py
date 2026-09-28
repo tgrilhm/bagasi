@@ -87,9 +87,10 @@ class ResiPainter:
     SECT_HEAD  = 28   # tinggi judul seksi
     SECTION_GAP = 8   # jarak antar seksi
 
-    def __init__(self, paket: dict, kloter: dict):
+    def __init__(self, paket: dict, kloter: dict, kategoris: list):
         self._p  = paket
         self._k  = kloter
+        self._kategoris = kategoris
         self._f  = _load_fonts()
 
     # -- estimasi total tinggi canvas ---------------------------------
@@ -98,12 +99,15 @@ class ResiPainter:
         h += 10 + 88         # resi box + gap
         h += 10              # gap
 
-        # pengirim
-        h += self.SECT_HEAD + 2 * self.ROW_H + self.SECTION_GAP
         # penerima
         h += self.SECT_HEAD + 2 * self.ROW_H + self.SECTION_GAP
         # detail barang
-        n  = 4 + (1 if self._p.get("catatan") else 0)
+        # Hitung jumlah baris: untuk setiap kategori (4 rows: nama, berat, tarif, subtotal)
+        # + 1 row untuk tanggal + catatan jika ada
+        num_kategori = len(self._kategoris) if self._kategoris else 1
+        n  = (num_kategori * 4) + 1  # 4 rows per kategori + 1 tanggal
+        if self._p.get("catatan"):
+            n += 1
         h += self.SECT_HEAD + n * self.ROW_H + self.SECTION_GAP
 
         h += 10 + 75        # total box + gap
@@ -140,14 +144,7 @@ class ResiPainter:
                      f["kloter"],   C_LIGHT)
         y = by2 + 12
 
-        # ── 3. Pengirim ───────────────────────────────────────────────
-        y = self._section(d, y, "PENGIRIM", [
-            ("Nama",  self._p.get("nama_pengirim")  or "—"),
-            ("No HP", self._p.get("no_hp_pengirim") or "—"),
-        ])
-        y += self.SECTION_GAP
-
-        # ── 4. Penerima ───────────────────────────────────────────────
+        # ── 3. Penerima ───────────────────────────────────────────────
         y = self._section(d, y, "PENERIMA", [
             ("Nama",  self._p.get("nama_penerima")  or "—"),
             ("No HP", self._p.get("no_hp_penerima") or "—"),
@@ -155,14 +152,38 @@ class ResiPainter:
         y += self.SECTION_GAP
 
         # ── 5. Detail Barang ──────────────────────────────────────────
-        detail = [
-            ("Kategori", self._p.get("kategori", "")),
-            ("Berat",    berat_fmt(self._p.get("berat_kg", 0))),
-            ("Tarif/kg", rupiah(self._p.get("tarif_per_kg", 0))),
-            ("Tanggal",  tanggal_indo(self._p.get("tanggal_dibuat", ""))),
-        ]
+        detail = []
+        
+        # Iterasi semua kategori barang
+        if self._kategoris:
+            for i, kat in enumerate(self._kategoris, 1):
+                prefix = f"Kategori {i}" if len(self._kategoris) > 1 else "Kategori"
+                berat = kat.get("berat_kg", 0)
+                tarif = kat.get("tarif_per_kg", 0)
+                subtotal = berat * tarif
+                
+                detail.append((prefix, kat.get("nama_kategori", "")))
+                detail.append(("  Berat", berat_fmt(berat)))
+                detail.append(("  Tarif/kg", rupiah(tarif)))
+                detail.append(("  Sub Total", rupiah(subtotal)))
+        else:
+            # Fallback jika kategoris kosong (backward compatibility)
+            berat = self._p.get("berat_kg", 0)
+            tarif = self._p.get("tarif_per_kg", 0)
+            subtotal = berat * tarif
+            
+            detail.append(("Kategori", self._p.get("kategori", "")))
+            detail.append(("Berat", berat_fmt(berat)))
+            detail.append(("Tarif/kg", rupiah(tarif)))
+            detail.append(("Sub Total", rupiah(subtotal)))
+        
+        # Tanggal dibuat (hanya sekali untuk semua kategori)
+        detail.append(("Tanggal", tanggal_indo(self._p.get("tanggal_dibuat", ""))))
+        
+        # Catatan opsional
         if self._p.get("catatan"):
             detail.append(("Catatan", str(self._p["catatan"])))
+        
         y = self._section(d, y, "DETAIL BARANG", detail)
         y += 12
 
@@ -220,13 +241,14 @@ class ResiPainter:
 
 # ── Public API ────────────────────────────────────────────────────────
 
-def cetak_resi_image(paket: dict, kloter: dict, output_path: Path) -> Path:
+def cetak_resi_image(paket: dict, kloter: dict, kategoris: list, output_path: Path) -> Path:
     """
     Generate resi JPG menggunakan Pillow (tanpa Chrome/html2image).
 
     Args:
         paket       : dict data paket dari database
         kloter      : dict data kloter dari database
+        kategoris   : list of dict data kategori barang
         output_path : Path file output (ekstensi .jpg / .png)
 
     Returns:
@@ -234,7 +256,7 @@ def cetak_resi_image(paket: dict, kloter: dict, output_path: Path) -> Path:
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    img      = ResiPainter(paket, kloter).render()
+    img      = ResiPainter(paket, kloter, kategoris).render()
     jpg_path = output_path.with_suffix(".jpg")
     img.save(str(jpg_path), "JPEG", quality=95)
     return jpg_path
