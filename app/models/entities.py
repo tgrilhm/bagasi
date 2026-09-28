@@ -8,8 +8,8 @@ from typing import Optional
 
 
 class KategoriBarang(Enum):
-    PAKAIAN    = "Pakaian"
-    MAKANAN    = "Makanan"
+    BIASA      = "Biasa"
+    SKINCARE   = "Skincare"
     ELEKTRONIK = "Elektronik"
 
     @classmethod
@@ -66,6 +66,18 @@ class Kloter:
     tanggal_dikirim: Optional[datetime] = None
     tanggal_selesai: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+@dataclass(frozen=True)
+class PaketKategori:
+    id: str
+    paket_id: str
+    isi_barang: str
+    kategori: str
+    berat_kg: float
+    tarif_per_kg: float
+    total_harga: float
+    urutan: int
 
 
 @dataclass(frozen=True)

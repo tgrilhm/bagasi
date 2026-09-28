@@ -69,16 +69,10 @@ def init_db() -> None:
                 id              TEXT PRIMARY KEY,
                 no_resi         TEXT UNIQUE NOT NULL,
                 kloter_id       TEXT NOT NULL,
-                nama_pengirim   TEXT NOT NULL,
-                no_hp_pengirim  TEXT NOT NULL,
                 nama_penerima   TEXT NOT NULL,
                 no_hp_penerima  TEXT NOT NULL,
-                kategori        TEXT NOT NULL,
-                berat_kg        REAL NOT NULL,
-                tarif_per_kg    REAL NOT NULL,
                 total_harga     REAL NOT NULL,
                 status          TEXT NOT NULL DEFAULT 'Dalam Proses',
-                catatan         TEXT,
                 tanggal_dibuat  TEXT NOT NULL,
                 tanggal_selesai TEXT,
                 penerima_bayar  TEXT,
@@ -88,6 +82,21 @@ def init_db() -> None:
                 FOREIGN KEY (kloter_id)   REFERENCES kloter(id),
                 FOREIGN KEY (dibuat_oleh) REFERENCES karyawan(username)
             );
+
+            CREATE TABLE IF NOT EXISTS paket_kategori (
+                id              TEXT PRIMARY KEY,
+                paket_id        TEXT NOT NULL,
+                isi_barang      TEXT NOT NULL,
+                kategori        TEXT NOT NULL,
+                berat_kg        REAL NOT NULL,
+                tarif_per_kg    REAL NOT NULL,
+                total_harga     REAL NOT NULL,
+                urutan          INTEGER NOT NULL DEFAULT 1,
+                FOREIGN KEY (paket_id) REFERENCES paket(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_paket_kategori_paket_id 
+            ON paket_kategori(paket_id);
         """)
 
         # Migrate: add status & payment columns if not exist
@@ -287,10 +296,12 @@ def delete_kloter(kloter_id: str) -> None:
 def get_kloter_summary(kloter_id: str) -> dict:
     with get_conn() as conn:
         row = conn.execute(
-            """SELECT COUNT(*) as total_paket,
-                      COALESCE(SUM(berat_kg), 0)    as total_berat,
-                      COALESCE(SUM(total_harga), 0) as total_pendapatan
-               FROM paket WHERE kloter_id = ?""",
+            """SELECT COUNT(DISTINCT p.id) as total_paket,
+                      COALESCE(SUM(pk.berat_kg), 0)    as total_berat,
+                      COALESCE(SUM(p.total_harga), 0) as total_pendapatan
+                FROM paket p
+                LEFT JOIN paket_kategori pk ON p.id = pk.paket_id
+                WHERE p.kloter_id = ?""",
             (kloter_id,),
         ).fetchone()
         return dict(row) if row else {"total_paket": 0, "total_berat": 0.0, "total_pendapatan": 0.0}
@@ -324,55 +335,34 @@ def get_paket_by_resi(no_resi: str) -> Optional[sqlite3.Row]:
 
 def insert_paket(
     kloter_id: str,
-    nama_pengirim: str,
-    no_hp_pengirim: str,
     nama_penerima: str,
     no_hp_penerima: str,
-    kategori: str,
-    berat_kg: float,
-    tarif_per_kg: float,
     dibuat_oleh: str,
-    catatan: Optional[str] = None,
 ) -> str:
     paket_id = _gen_id()
     no_resi  = generate_no_resi()
-    total    = round(berat_kg * tarif_per_kg, 2)
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO paket
-               (id, no_resi, kloter_id, nama_pengirim, no_hp_pengirim,
-                nama_penerima, no_hp_penerima, kategori, berat_kg,
-                tarif_per_kg, total_harga, catatan, tanggal_dibuat, dibuat_oleh)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (paket_id, no_resi, kloter_id, nama_pengirim, no_hp_pengirim,
-             nama_penerima, no_hp_penerima, kategori, berat_kg,
-             tarif_per_kg, total, catatan, _now(), dibuat_oleh),
+               (id, no_resi, kloter_id, nama_penerima, no_hp_penerima,
+                total_harga, tanggal_dibuat, dibuat_oleh)
+               VALUES (?, ?, ?, ?, ?, 0, ?, ?)""",
+            (paket_id, no_resi, kloter_id, nama_penerima, no_hp_penerima, _now(), dibuat_oleh),
         )
     return paket_id
 
 
 def update_paket(
     paket_id: str,
-    nama_pengirim: str,
-    no_hp_pengirim: str,
     nama_penerima: str,
     no_hp_penerima: str,
-    kategori: str,
-    berat_kg: float,
-    tarif_per_kg: float,
-    catatan: Optional[str],
 ) -> None:
-    total = round(berat_kg * tarif_per_kg, 2)
     with get_conn() as conn:
         conn.execute(
             """UPDATE paket SET
-               nama_pengirim = ?, no_hp_pengirim = ?,
-               nama_penerima = ?, no_hp_penerima = ?,
-               kategori = ?, berat_kg = ?, tarif_per_kg = ?,
-               total_harga = ?, catatan = ?, updated_at = ?
+               nama_penerima = ?, no_hp_penerima = ?, updated_at = ?
                WHERE id = ?""",
-            (nama_pengirim, no_hp_pengirim, nama_penerima, no_hp_penerima,
-             kategori, berat_kg, tarif_per_kg, total, catatan, _now(), paket_id),
+            (nama_penerima, no_hp_penerima, _now(), paket_id),
         )
 
 
@@ -403,6 +393,78 @@ def update_paket_status(
 def delete_paket(paket_id: str) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM paket WHERE id = ?", (paket_id,))
+
+
+# ---------------------------------------------------------------------------
+# Paket Kategori
+# ---------------------------------------------------------------------------
+
+def insert_paket_kategori(
+    paket_id: str,
+    isi_barang: str,
+    kategori: str,
+    berat_kg: float,
+    tarif_per_kg: float,
+    urutan: int = 1,
+) -> str:
+    """Insert kategori barang untuk paket."""
+    kategori_id = _gen_id()
+    total = round(berat_kg * tarif_per_kg, 2)
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO paket_kategori
+               (id, paket_id, isi_barang, kategori, berat_kg, tarif_per_kg, total_harga, urutan)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (kategori_id, paket_id, isi_barang, kategori, berat_kg, tarif_per_kg, total, urutan),
+        )
+    return kategori_id
+
+
+def get_paket_kategoris(paket_id: str) -> list[sqlite3.Row]:
+    """Get semua kategori untuk paket tertentu."""
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM paket_kategori WHERE paket_id = ? ORDER BY urutan",
+            (paket_id,),
+        ).fetchall()
+
+
+def update_paket_kategori(
+    kategori_id: str,
+    isi_barang: str,
+    kategori: str,
+    berat_kg: float,
+    tarif_per_kg: float,
+) -> None:
+    """Update kategori barang."""
+    total = round(berat_kg * tarif_per_kg, 2)
+    with get_conn() as conn:
+        conn.execute(
+            """UPDATE paket_kategori SET
+               isi_barang = ?, kategori = ?, berat_kg = ?, tarif_per_kg = ?, total_harga = ?
+               WHERE id = ?""",
+            (isi_barang, kategori, berat_kg, tarif_per_kg, total, kategori_id),
+        )
+
+
+def delete_paket_kategoris_by_paket(paket_id: str) -> None:
+    """Delete semua kategori untuk paket tertentu."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM paket_kategori WHERE paket_id = ?", (paket_id,))
+
+
+def recalculate_paket_total(paket_id: str) -> None:
+    """Recalculate total_harga paket dari sum semua kategori."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(total_harga), 0) as total FROM paket_kategori WHERE paket_id = ?",
+            (paket_id,),
+        ).fetchone()
+        total = row["total"] if row else 0
+        conn.execute(
+            "UPDATE paket SET total_harga = ?, updated_at = ? WHERE id = ?",
+            (total, _now(), paket_id),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -438,7 +500,7 @@ def get_dashboard_stats() -> dict:
         ).fetchone()[0]
 
         recent_paket = conn.execute(
-            """SELECT p.no_resi, p.nama_penerima, p.kategori, p.total_harga,
+            """SELECT p.no_resi, p.nama_penerima, p.total_harga,
                       p.tanggal_dibuat, p.dibuat_oleh, k.nama_kloter
                FROM paket p JOIN kloter k ON p.kloter_id = k.id
                ORDER BY p.tanggal_dibuat DESC LIMIT 8""",
