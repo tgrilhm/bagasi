@@ -132,7 +132,7 @@ class DashboardPage(ctk.CTkFrame):
                          font=ctk.CTkFont(size=11, weight="bold"),
                          anchor="w").pack(anchor="w")
             ctk.CTkLabel(info,
-                         text=f"{p['no_resi']}  •  {p['kategori']}  •  {p.get('nama_kloter', '')}", 
+                         text=f"{p['no_resi']}  •  {p.get('nama_kloter', '')}", 
                          font=ctk.CTkFont(size=10), text_color="gray",
                          anchor="w").pack(anchor="w")
 

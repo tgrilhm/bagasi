@@ -11,7 +11,7 @@ from ...models.entities import KategoriBarang, StatusKloter
 from ...core.session import Session
 from ...services.sheets_sync import sync as gs_sync
 from ...utils.formatters import berat_fmt, rupiah, tanggal_waktu
-from ...utils.validators import ValidationError, require, validate_berat, validate_no_hp, validate_tarif
+from ...utils.validators import ValidationError, require, validate_berat, validate_no_hp, validate_tarif, validate_isi_barang
 from ...utils.pdf_generator import cetak_laporan_kloter
 from ...utils.resi_image_generator import cetak_resi_image
 from ...utils.excel_exporter import export_kloter
@@ -26,7 +26,7 @@ STATUS_NEXT = {"Terbuka": "Dikirim", "Dikirim": "Selesai"}
 # Popup Modal — Tambah / Edit Paket
 # ══════════════════════════════════════════════════════════════════════
 class PaketFormDialog(ctk.CTkToplevel):
-    """Modal popup untuk tambah / edit paket."""
+    """Modal popup untuk tambah / edit paket dengan multi-kategori."""
 
     def __init__(self, parent, kloter: dict, on_saved: Callable,
                  edit_paket: Optional[dict] = None):
@@ -34,18 +34,18 @@ class PaketFormDialog(ctk.CTkToplevel):
         self._kloter     = kloter
         self._on_saved   = on_saved
         self._edit_paket = edit_paket
+        self._kategori_widgets = []  # Store kategori form widgets
 
         title = "Edit Paket" if edit_paket else "Tambah Paket Baru"
         self.title(title)
         self.resizable(False, False)
 
-        # Ukuran & posisi (tengah layar)
-        w, h = 480, 580
+        # Ukuran & posisi (lebih tinggi untuk multi-kategori)
+        w, h = 520, 680
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
         self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
 
-        # Blokir window induk
         self.grab_set()
         self.focus_set()
         self.lift()
@@ -73,33 +73,28 @@ class PaketFormDialog(ctk.CTkToplevel):
                          font=ctk.CTkFont(size=12, weight="bold"),
                          text_color="#7eb3e8").pack(anchor="w", pady=(12, 2))
 
-        # ── Pengirim ──────────────────────────────────────────
-        section_lbl("Pengirim")
-        lbl("Nama Pengirim *")
-        self._e_np  = entry("Nama pengirim")
-        lbl("No HP Pengirim *")
-        self._e_hpp = entry("08xxxxxxxxx")
-
         # ── Penerima ──────────────────────────────────────────
-        section_lbl("Penerima")
+        section_lbl("📍 Penerima")
         lbl("Nama Penerima *")
         self._e_nr  = entry("Nama penerima")
         lbl("No HP Penerima *")
         self._e_hpr = entry("08xxxxxxxxx")
 
-        # ── Detail Barang ─────────────────────────────────────
-        section_lbl("Detail Barang")
-        lbl("Kategori *")
-        self._var_kat = tk.StringVar(value=KATEGORIS[0])
-        ctk.CTkComboBox(scroll, values=KATEGORIS, variable=self._var_kat,
-                        state="readonly", height=36).pack(fill="x")
+        # ── Total Kategori ────────────────────────────────────
+        section_lbl("📦 Detail Barang")
+        lbl("Total Kategori Barang *")
+        self._var_total_kat = tk.StringVar(value="1")
+        self._cmb_total = ctk.CTkComboBox(
+            scroll, values=["1", "2", "3"],
+            variable=self._var_total_kat,
+            state="readonly", height=36,
+            command=self._on_total_kategori_changed
+        )
+        self._cmb_total.pack(fill="x")
 
-        lbl("Berat (kg) *")
-        self._e_berat = entry("Contoh: 2.5")
-        lbl("Tarif per kg (Rp) *")
-        self._e_tarif = entry("Contoh: 15000")
-        lbl("Catatan (opsional)")
-        self._e_catatan = entry("Catatan tambahan...")
+        # Container untuk dynamic kategori forms
+        self._kategori_container = ctk.CTkFrame(scroll, fg_color="transparent")
+        self._kategori_container.pack(fill="x", pady=(8, 0))
 
         # Preview total
         self._lbl_total = ctk.CTkLabel(scroll, text="Total: Rp 0",
@@ -107,12 +102,9 @@ class PaketFormDialog(ctk.CTkToplevel):
                                        text_color="#27ae60")
         self._lbl_total.pack(pady=(10, 4))
 
-        self._e_berat.bind("<KeyRelease>", self._update_preview)
-        self._e_tarif.bind("<KeyRelease>", self._update_preview)
-
         # Error label
         self._lbl_err = ctk.CTkLabel(scroll, text="", text_color="#e74c3c",
-                                     font=ctk.CTkFont(size=11), wraplength=420)
+                                     font=ctk.CTkFont(size=11), wraplength=460)
         self._lbl_err.pack(pady=(2, 0))
 
         # Tombol
@@ -124,56 +116,185 @@ class PaketFormDialog(ctk.CTkToplevel):
                       fg_color="#2d3748", hover_color="#4a5568",
                       command=self.destroy).pack(side="left", fill="x", expand=True)
 
-        # Pre-fill jika edit
+        # Pre-fill jika edit (load existing kategoris)
         if self._edit_paket:
             p = self._edit_paket
-            self._e_np.insert(0,  p.get("nama_pengirim", ""))
-            self._e_hpp.insert(0, p.get("no_hp_pengirim", ""))
             self._e_nr.insert(0,  p.get("nama_penerima", ""))
             self._e_hpr.insert(0, p.get("no_hp_penerima", ""))
-            self._var_kat.set(p.get("kategori", KATEGORIS[0]))
-            self._e_berat.insert(0, str(p.get("berat_kg", "")))
-            self._e_tarif.insert(0, str(p.get("tarif_per_kg", "")))
-            if p.get("catatan"):
-                self._e_catatan.insert(0, p["catatan"])
-            self._update_preview()
+            
+            # Load kategoris dari database
+            kategoris = database.get_paket_kategoris(p["id"])
+            if kategoris:
+                self._var_total_kat.set(str(len(kategoris)))
+        
+        # Build initial kategori forms
+        self._rebuild_kategori_forms()
+        
+        # Pre-fill kategori data if editing
+        if self._edit_paket and kategoris:
+            for i, kat in enumerate(kategoris):
+                if i < len(self._kategori_widgets):
+                    widgets = self._kategori_widgets[i]
+                    widgets["isi_barang"].insert(0, kat["isi_barang"])
+                    widgets["kategori"].set(kat["kategori"])
+                    widgets["berat"].insert(0, str(kat["berat_kg"]))
+                    widgets["tarif"].insert(0, str(kat["tarif_per_kg"]))
 
-        self._e_np.focus()
+        self._e_nr.focus()
+        self._update_total_preview()
 
-    def _update_preview(self, *_) -> None:
-        try:
-            b = float(self._e_berat.get().replace(",", ".") or 0)
-            t = float(self._e_tarif.get().replace(",", ".") or 0)
-            self._lbl_total.configure(text=f"Total: {rupiah(b * t)}")
-        except ValueError:
-            self._lbl_total.configure(text="Total: —")
+    def _on_total_kategori_changed(self, *_) -> None:
+        """Rebuild forms saat total kategori diubah."""
+        self._rebuild_kategori_forms()
+        self._update_total_preview()
+
+    def _rebuild_kategori_forms(self) -> None:
+        """Build dynamic forms berdasarkan total kategori."""
+        # Clear existing
+        for w in self._kategori_container.winfo_children():
+            w.destroy()
+        self._kategori_widgets.clear()
+
+        total = int(self._var_total_kat.get())
+        
+        for i in range(1, total + 1):
+            self._build_kategori_form(i)
+
+    def _build_kategori_form(self, urutan: int) -> None:
+        """Build form untuk satu kategori."""
+        frame = ctk.CTkFrame(self._kategori_container, corner_radius=8, border_width=1,
+                             border_color="#2d3748")
+        frame.pack(fill="x", pady=(8, 0))
+
+        # Header
+        ctk.CTkLabel(frame, text=f"Kategori #{urutan}",
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color="#7eb3e8").pack(anchor="w", padx=12, pady=(8, 4))
+
+        def lbl(text: str) -> None:
+            ctk.CTkLabel(frame, text=text, anchor="w",
+                         font=ctk.CTkFont(size=10, weight="bold")).pack(fill="x", padx=12, pady=(4, 2))
+
+        def entry(ph: str = "") -> ctk.CTkEntry:
+            e = ctk.CTkEntry(frame, height=34, placeholder_text=ph)
+            e.pack(fill="x", padx=12, pady=(0, 4))
+            return e
+
+        lbl("Isi Barang *")
+        e_isi = entry("Contoh: Baju, Serum, Laptop, dll")
+
+        lbl("Kategori *")
+        var_kat = tk.StringVar(value=KATEGORIS[0])
+        cmb_kat = ctk.CTkComboBox(frame, values=KATEGORIS, variable=var_kat,
+                                   state="readonly", height=34)
+        cmb_kat.pack(fill="x", padx=12, pady=(0, 4))
+
+        lbl("Berat (kg) *")
+        e_berat = entry("Contoh: 2.5")
+        e_berat.bind("<KeyRelease>", lambda e: self._update_total_preview())
+
+        lbl("Tarif per kg (Rp) *")
+        e_tarif = entry("Contoh: 15000")
+        e_tarif.bind("<KeyRelease>", lambda e: self._update_total_preview())
+
+        # Subtotal label
+        lbl_sub = ctk.CTkLabel(frame, text="Subtotal: Rp 0",
+                                font=ctk.CTkFont(size=10, weight="bold"),
+                                text_color="#27ae60")
+        lbl_sub.pack(anchor="e", padx=12, pady=(2, 8))
+
+        # Store widgets
+        self._kategori_widgets.append({
+            "frame": frame,
+            "isi_barang": e_isi,
+            "kategori": var_kat,
+            "berat": e_berat,
+            "tarif": e_tarif,
+            "subtotal_lbl": lbl_sub,
+        })
+
+    def _update_total_preview(self, *_) -> None:
+        """Update preview total dan subtotal."""
+        grand_total = 0
+        for widgets in self._kategori_widgets:
+            try:
+                b = float(widgets["berat"].get().replace(",", ".") or 0)
+                t = float(widgets["tarif"].get().replace(",", ".") or 0)
+                subtotal = b * t
+                widgets["subtotal_lbl"].configure(text=f"Subtotal: {rupiah(subtotal)}")
+                grand_total += subtotal
+            except ValueError:
+                widgets["subtotal_lbl"].configure(text="Subtotal: —")
+        
+        self._lbl_total.configure(text=f"Total: {rupiah(grand_total)}")
 
     def _submit(self) -> None:
         self._lbl_err.configure(text="")
+        
         try:
-            nm_p  = require(self._e_np.get(),         "Nama Pengirim")
-            hp_p  = validate_no_hp(self._e_hpp.get(), "No HP Pengirim")
-            nm_r  = require(self._e_nr.get(),          "Nama Penerima")
-            hp_r  = validate_no_hp(self._e_hpr.get(), "No HP Penerima")
-            berat = validate_berat(self._e_berat.get())
-            tarif = validate_tarif(self._e_tarif.get())
-            kat   = self._var_kat.get()
-            cat   = self._e_catatan.get().strip() or None
+            # Validate penerima
+            nm_r = require(self._e_nr.get(), "Nama Penerima")
+            hp_r = validate_no_hp(self._e_hpr.get(), "No HP Penerima")
+
+            # Validate semua kategori
+            kategoris_data = []
+            for i, widgets in enumerate(self._kategori_widgets, 1):
+                from ...utils.validators import validate_isi_barang
+                isi = validate_isi_barang(widgets["isi_barang"].get())
+                kat = widgets["kategori"].get().strip()
+                
+                # Validasi kategori wajib diisi
+                if not kat:
+                    raise ValidationError(f"Kategori item {i} wajib diisi!")
+                
+                berat = validate_berat(widgets["berat"].get())
+                tarif = validate_tarif(widgets["tarif"].get())
+                
+                kategoris_data.append({
+                    "isi_barang": isi,
+                    "kategori": kat,
+                    "berat_kg": berat,
+                    "tarif_per_kg": tarif,
+                    "urutan": i,
+                })
+
         except ValidationError as ex:
             self._lbl_err.configure(text=str(ex))
             return
 
         if self._edit_paket:
-            database.update_paket(
-                self._edit_paket["id"], nm_p, hp_p, nm_r, hp_r,
-                kat, berat, tarif, cat)
-            gs_sync.push_paket(self._edit_paket["id"])
+            # Update paket + kategoris
+            paket_id = self._edit_paket["id"]
+            database.update_paket(paket_id, nm_r, hp_r)
+            
+            # Delete old kategoris, insert new
+            database.delete_paket_kategoris_by_paket(paket_id)
+            for kat_data in kategoris_data:
+                database.insert_paket_kategori(
+                    paket_id, kat_data["isi_barang"], kat_data["kategori"],
+                    kat_data["berat_kg"], kat_data["tarif_per_kg"], kat_data["urutan"]
+                )
+            
+            # Recalculate total
+            database.recalculate_paket_total(paket_id)
+            gs_sync.push_paket(paket_id)
             msg = "Paket berhasil diperbarui."
         else:
-            new_id = database.insert_paket(
-                self._kloter["id"], nm_p, hp_p, nm_r, hp_r,
-                kat, berat, tarif, Session.username(), cat)
-            gs_sync.push_paket(new_id)
+            # Insert paket baru
+            paket_id = database.insert_paket(
+                self._kloter["id"], nm_r, hp_r, Session.username()
+            )
+            
+            # Insert kategoris
+            for kat_data in kategoris_data:
+                database.insert_paket_kategori(
+                    paket_id, kat_data["isi_barang"], kat_data["kategori"],
+                    kat_data["berat_kg"], kat_data["tarif_per_kg"], kat_data["urutan"]
+                )
+            
+            # Recalculate total
+            database.recalculate_paket_total(paket_id)
+            gs_sync.push_paket(paket_id)
             msg = "Paket berhasil ditambahkan."
 
         self.destroy()
@@ -222,19 +343,31 @@ class PaketSelesaiDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(self, text="Penerima Bayar", anchor="w",
                      font=ctk.CTkFont(size=11)).pack(fill="x", padx=20)
-        self._e_penerima = ctk.CTkEntry(self, height=34, placeholder_text="Nama penerima pembayaran")
-        self._e_penerima.pack(fill="x", padx=20, pady=(2, 6))
+        
+        # Penerima: Read-only label dengan nama Muhammad Louis Nawafil
+        self._lbl_penerima = ctk.CTkLabel(self, text="Muhammad Louis Nawafil",
+                                          anchor="w", font=ctk.CTkFont(size=11),
+                                          text_color="#27ae60", fg_color="#1a2332",
+                                          corner_radius=6)
+        self._lbl_penerima.pack(fill="x", padx=20, pady=(2, 6))
+        
+        # Store penerima value untuk _confirm()
+        self._penerima_value = "Muhammad Louis Nawafil"
 
-        ctk.CTkLabel(self, text="Rekening Tujuan", anchor="w",
+        ctk.CTkLabel(self, text="Rekening Tujuan (Pilih Bank)", anchor="w",
                      font=ctk.CTkFont(size=11)).pack(fill="x", padx=20)
-        self._e_rekening = ctk.CTkEntry(self, height=34, placeholder_text="No. rekening / nama bank")
-        self._e_rekening.pack(fill="x", padx=20, pady=(2, 6))
+        
+        # Rekening: ComboBox dengan 7 bank pilihan
+        bank_options = ["BCA", "BNI", "BRI", "Mandiri", "Dana", "Seabank", "BSI"]
+        self._var_rekening = tk.StringVar(value="")
+        self._cmb_rekening = ctk.CTkComboBox(self, values=bank_options,
+                                             variable=self._var_rekening,
+                                             state="readonly", height=34)
+        self._cmb_rekening.pack(fill="x", padx=20, pady=(2, 6))
 
         # Pre-fill jika sudah ada
-        if self._paket.get("penerima_bayar"):
-            self._e_penerima.insert(0, self._paket["penerima_bayar"])
         if self._paket.get("rekening_tujuan"):
-            self._e_rekening.insert(0, self._paket["rekening_tujuan"])
+            self._var_rekening.set(self._paket["rekening_tujuan"])
 
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.pack(fill="x", padx=20, pady=(10, 16))
@@ -250,8 +383,8 @@ class PaketSelesaiDialog(ctk.CTkToplevel):
         ).pack(side="left", fill="x", expand=True)
 
     def _confirm(self) -> None:
-        pb = self._e_penerima.get().strip() or None
-        rk = self._e_rekening.get().strip() or None
+        pb = self._penerima_value  # Always use fixed value
+        rk = self._var_rekening.get().strip() or None
         self.destroy()
         self._on_confirmed(pb, rk)
 
@@ -388,8 +521,23 @@ class PaketPage(ctk.CTkFrame):
         rows = []
         for p in paket_list:
             r = dict(p)
-            r["_berat_fmt"] = berat_fmt(r["berat_kg"])
-            r["_tarif_fmt"] = rupiah(r["tarif_per_kg"])
+            
+            # Get kategoris untuk paket ini
+            kategoris = database.get_paket_kategoris(r["id"])
+            
+            # Format kategori summary
+            if kategoris:
+                kat_parts = []
+                total_berat = 0
+                for kat in kategoris:
+                    kat_parts.append(f"{kat['kategori']} ({kat['berat_kg']}kg)")
+                    total_berat += kat['berat_kg']
+                r["_kategoris_fmt"] = ", ".join(kat_parts)
+                r["_total_berat"] = f"{total_berat:.2f} kg"
+            else:
+                r["_kategoris_fmt"] = "—"
+                r["_total_berat"] = "0 kg"
+            
             r["_total_fmt"] = rupiah(r["total_harga"])
             r["_tgl_fmt"]   = tanggal_waktu(r["tanggal_dibuat"])
             rows.append(r)
@@ -403,22 +551,19 @@ class PaketPage(ctk.CTkFrame):
         actions.append(("🖨 Resi",    "#1e3a1e", "#27ae60", self._cetak_resi_paket))
 
         columns = [
-            ("No Resi",       "no_resi",        120, "w"),
-            ("Pengirim",      "nama_pengirim",   120, "w"),
-            ("HP Pengirim",   "no_hp_pengirim",  105, "w"),
-            ("Penerima",      "nama_penerima",   120, "w"),
-            ("HP Penerima",   "no_hp_penerima",  105, "w"),
-            ("Kategori",      "kategori",         85, "w"),
-            ("Berat",         "_berat_fmt",       65, "center"),
-            ("Tarif/kg",      "_tarif_fmt",       95, "e"),
-            ("Total",         "_total_fmt",      110, "e"),
+            ("No Resi",       "no_resi",         120, "w"),
+            ("Penerima",      "nama_penerima",   140, "w"),
+            ("HP Penerima",   "no_hp_penerima",  110, "w"),
+            ("Kategori(s)",   "_kategoris_fmt",  200, "w"),
+            ("Total Berat",   "_total_berat",     85, "center"),
+            ("Total Harga",   "_total_fmt",      110, "e"),
         ]
 
         table = DataTable(
             self._table_wrap,
             columns=columns, rows=rows,
             actions=actions,
-            search_keys=["no_resi", "nama_pengirim", "nama_penerima", "kategori"],
+            search_keys=["no_resi", "nama_penerima", "_kategoris_fmt"],
         )
         table.pack(fill="both", expand=True)
 
@@ -478,6 +623,7 @@ class PaketPage(ctk.CTkFrame):
                                    f"Hapus paket {row['no_resi']}?", icon="warning"):
             return
         database.delete_paket(row["id"])
+        gs_sync.push_delete_paket(row["no_resi"])
         self.refresh()
         show_toast(self._win, "Paket dihapus.", "info")
 
@@ -485,12 +631,16 @@ class PaketPage(ctk.CTkFrame):
         row = database.get_paket_by_resi(paket.get("no_resi", ""))
         if not row:
             return
+        
+        # Get kategoris
+        kategoris = database.get_paket_kategoris(dict(row)["id"])
+        
         out_dir = Path(__file__).parent.parent.parent.parent / "exports" / "resi"
         out_dir.mkdir(parents=True, exist_ok=True)
         ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
         out = out_dir / f"Resi_{row['no_resi']}_{ts}.jpg"
         try:
-            result = cetak_resi_image(dict(row), self._kloter, out)
+            result = cetak_resi_image(dict(row), self._kloter, [dict(k) for k in kategoris], out)
             import os; os.startfile(str(result))
             show_toast(self._win, f"Resi {row['no_resi']} berhasil dibuat.", "success")
         except Exception as e:

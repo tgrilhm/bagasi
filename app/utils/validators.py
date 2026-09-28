@@ -50,6 +50,17 @@ def validate_tarif(value: str) -> float:
     return f
 
 
+def validate_isi_barang(value: str) -> str:
+    v = value.strip()
+    if not v:
+        raise ValidationError("Isi barang tidak boleh kosong.")
+    if len(v) < 3:
+        raise ValidationError("Isi barang minimal 3 karakter.")
+    if len(v) > 100:
+        raise ValidationError("Isi barang maksimal 100 karakter.")
+    return v
+
+
 def validate_username(value: str) -> str:
     v = value.strip().lower()
     if not v:
