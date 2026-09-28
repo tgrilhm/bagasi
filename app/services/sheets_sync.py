@@ -129,6 +129,12 @@ class SheetsSync:
             return
         self._queue.put(("paket", str(paket_id)))
 
+    def push_delete_paket(self, no_resi: str) -> None:
+        """Antri delete paket dari sheet berdasarkan no_resi."""
+        if self._status not in ("idle", "syncing") or not self._url:
+            return
+        self._queue.put(("delete_paket", str(no_resi)))
+
     def disconnect(self) -> None:
         self._url = ""
         self._set_status("disconnected")
@@ -161,6 +167,8 @@ class SheetsSync:
                 try:
                     if kind == "kloter":
                         self._sync_kloter(item_id)
+                    elif kind == "delete_paket":
+                        self._sync_delete_paket(item_id)
                     else:
                         self._sync_paket(item_id)
                 except Exception:
@@ -203,25 +211,70 @@ class SheetsSync:
         k = database.get_kloter(r["kloter_id"])
         nama_kloter = dict(k)["nama_kloter"] if k else r["kloter_id"]
 
+        # Get kategoris untuk paket ini
+        kategoris = database.get_paket_kategoris(paket_id)
+        
         # Status pembayaran: otomatis dari penerima_bayar
-        status_bayar = "Sudah Dibayarkan" if r.get("penerima_bayar") else "Belum Dibayarkan"
+        status_bayar = "Lunas" if r.get("penerima_bayar") else "Belum Bayar"
+
+        # Multi-row format: satu row per kategori
+        rows = []
+        if kategoris:
+            total_kategori = len(kategoris)
+            for idx, kat_row in enumerate(kategoris, 1):
+                kat = dict(kat_row)  # Convert sqlite3.Row to dict
+                item_indicator = f"{idx}/{total_kategori}" if total_kategori > 1 else "-"
+                # Total paket hanya di row pertama untuk avoid duplikasi dalam SUM
+                total_paket = r.get("total_harga", 0) if idx == 1 else ""
+                
+                rows.append([
+                    nama_kloter,                           # Kloter
+                    r["no_resi"],                          # No Resi
+                    item_indicator,                        # Item (1/2, 2/2, atau -)
+                    r.get("nama_penerima") or "",          # Nama Penerima
+                    r.get("no_hp_penerima") or "",         # No HP Penerima
+                    kat.get("kategori", ""),               # Kategori (FIXED)
+                    kat.get("isi_barang", ""),             # Isi Barang
+                    kat.get("berat_kg", 0),                # Berat (kg)
+                    kat.get("tarif_per_kg", 0),            # Tarif/kg
+                    kat.get("berat_kg", 0) * kat.get("tarif_per_kg", 0),  # Sub Total
+                    status_bayar,                          # Status Bayar
+                    r.get("rekening_tujuan") or "",        # Rekening Tujuan
+                    total_paket,                           # Total Paket (hanya row pertama)
+                ])
+        else:
+            # Fallback jika tidak ada kategoris
+            rows.append([
+                nama_kloter,
+                r["no_resi"],
+                "-",
+                r.get("nama_penerima") or "",
+                r.get("no_hp_penerima") or "",
+                "",
+                "",
+                0,
+                0,
+                0,
+                status_bayar,
+                r.get("rekening_tujuan") or "",
+                r.get("total_harga", 0),
+            ])
 
         payload = {
-            "action": "upsert_paket",
-            "row": [
-                r["no_resi"],                      # No Resi (lookup key)
-                r.get("nama_pengirim") or "",      # Nama Pengirim
-                r.get("no_hp_pengirim") or "",     # No HP Pengirim
-                r.get("nama_penerima") or "",      # Nama Penerima
-                r.get("no_hp_penerima") or "",     # No HP Penerima
-                r.get("kategori") or "",           # Jenis
-                r.get("berat_kg", 0),              # Berat (kg)
-                r.get("tarif_per_kg", 0),          # Harga/kg
-                r.get("total_harga", 0),           # Total Harga
-                r.get("penerima_bayar") or "",     # Penerima Bayar
-                r.get("rekening_tujuan") or "",    # Rekening Tujuan
-                status_bayar,                      # Status Bayar
-            ],
+            "action": "upsert_paket_multi",
+            "no_resi": r["no_resi"],
+            "rows": rows,
+        }
+        with self._lock:
+            result = _post(self._url, payload)
+            if result.get("status") != "ok":
+                raise RuntimeError(result.get("message", "unknown error"))
+
+    def _sync_delete_paket(self, no_resi: str) -> None:
+        """Delete paket dari Google Sheet berdasarkan no_resi."""
+        payload = {
+            "action": "delete_paket",
+            "no_resi": no_resi,
         }
         with self._lock:
             result = _post(self._url, payload)
